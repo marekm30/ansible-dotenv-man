@@ -142,62 +142,101 @@ diff:
 '''
 
 from ansible.module_utils.basic import AnsibleModule
+import os
+import re
+
+# Regex to validate keys
+KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Parse .env lines and return list of lines and original lines
+# Treat only lines matching "KEY=VALUE" 
+# Comments, blank or other lines stay unchanged
+def parse_env_lines(lines):
+  key_to_indexes = {}
+  for i, line in enumerate(lines):
+    # Keep trailing newline out of matching logic
+    raw = line.rstrip("\n")
+    if not raw or raw.lstrip().startswith("#"):
+      continue
+    # Match KEY=... at start of line with no leading space
+    if "=" in raw:
+      key, _ = raw.split("=", 1)
+      if KEY_RE.match(key):
+        key_to_indexes.setdefault(key, []).append(i)
+  return key_to_indexes, lines
+
+# Add quotes if requested
+def format_value(value, quote):
+  if quote == "none":
+    return value
+  if quote == "double":
+    return '"' + value.replace('"', r"\"") + '"'
+  if quote == "single":
+    return "'" + value.replace("'", r"\'") + "'"
+  raise ValueError("Invalid quote option")
+
+def read_file(path):
+  if not os.path.exists(path):
+    return []
+  with open(path, "r", encoding="utf-8") as f:
+    return f.readlines()
+
+def write_file(path, lines, mode, owner, group, module):
+  # Ensure parent dir exists
+  parent = os.path.dirname(path) or "."
+  if not os.path.isdir(parent):
+    os.makedirs(parent, exist_ok=True)
+
+  tmp_path = path + ".ansible_tmp"
+  with open(tmp_path, "w", encoding="utf-8") as f:
+      f.writelines(lines)
+  os.replace(tmp_path, path)
+
+  # Apply permissions/ownership if provided
+  if mode is not None:
+      module.set_mode_if_different(path, mode, False)
+  if owner is not None or group is not None:
+      module.set_owner_if_different(path, owner, False)
+      module.set_group_if_different(path, group, False)
+
+
+
 
 def run_module():
-    # define available arguments/parameters a user can pass to the module
-    module_args = dict(
-        name=dict(type='str', required=True),
-        new=dict(type='bool', required=False, default=False)
-    )
 
-    # seed the result dict in the object
-    # we primarily care about changed and state
-    # changed is if this module effectively modified the target
-    # state will include any data that you want your module to pass back
-    # for consumption, for example, in a subsequent task
-    result = dict(
-        changed=False,
-        original_message='',
-        message=''
-    )
+  # Available arguments/parameters a user can pass
+  module_args = dict(
+    path=dict(type="path", required=True),
+    values=dict(type="dict", required=False, default={}),
+    absent_keys=dict(type="list", elements="str", required=False, default=[]),
+    create=dict(type="bool", default=True),
+    quote=dict(type="str", choices=["none", "double", "single"], default="none"),
+    mode=dict(type="str", required=False, default=None),
+    owner=dict(type="str", required=False, default=None),
+    group=dict(type="str", required=False, default=None),
+  )
 
-    # the AnsibleModule object will be our abstraction working with Ansible
-    # this includes instantiation, a couple of common attr would be the
-    # args/params passed to the execution, as well as if the module
-    # supports check mode
-    module = AnsibleModule(
-        argument_spec=module_args,
-        supports_check_mode=True
-    )
+  module = AnsibleModule(
+    argument_spec=module_args,
+    supports_check_mode=True,
+    supports_diff=True,
+  )
 
-    # if the user is working with this module in only check mode we do not
-    # want to make any changes to the environment, just return the current
-    # state with no modifications
-    if module.check_mode:
-        module.exit_json(**result)
+  path = module.params["path"]
+  values = module.params["values"] or {}
+  absent_keys = module.params["absent_keys"] or []
+  create = module.params["create"]
+  quote = module.params["quote"]
+  mode = module.params["mode"]
+  owner = module.params["owner"]
+  group = module.params["group"]
 
-    # manipulate or modify the state as needed (this is going to be the
-    # part where your module will do what it needs to do)
-    result['original_message'] = module.params['name']
-    result['message'] = 'goodbye'
 
-    # use whatever logic you need to determine whether or not this module
-    # made any modifications to your target
-    if module.params['new']:
-        result['changed'] = True
 
-    # during the execution of the module, if there is an exception or a
-    # conditional state that effectively causes a failure, run
-    # AnsibleModule.fail_json() to pass in the message and the result
-    if module.params['name'] == 'fail me':
-        module.fail_json(msg='You requested this to fail', **result)
-
-    # in the event of a successful module execution, you will want to
-    # simple AnsibleModule.exit_json(), passing the key/value results
-    module.exit_json(**result)
 
 def main():
-    run_module()
+  run_module()
+
 
 if __name__ == '__main__':
-    main()
+  main()

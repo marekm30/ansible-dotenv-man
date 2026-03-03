@@ -275,7 +275,37 @@ def run_module():
   owner = module.params["owner"]
   group = module.params["group"]
 
+  # Validate keys 
+  for k in list(values.keys()) + list(absent_keys):
+    if not KEY_RE.match(k):
+        module.fail_json(msg=f"Invalid env var name: {k}. Must match {KEY_RE.pattern}")
 
+  before_lines = read_file(path)
+  key_to_indexes, _ = parse_env_lines(before_lines)
+
+  changed1, mid_lines = ensure_present(before_lines, values, quote, create, key_to_indexes)
+
+  # Re-parse after potential modifications before removing keys
+  key_to_indexes2, _ = parse_env_lines(mid_lines)
+  changed2, after_lines = ensure_absent(mid_lines, absent_keys, key_to_indexes2)
+
+  changed = changed1 or changed2
+
+  result = {
+    "changed": changed,
+    "path": path,
+    "managed_keys": sorted(list(values.keys())),
+    "removed_keys": sorted(list(absent_keys)),
+  }
+
+  if module._diff and changed:
+    result["diff"] = build_diff(before_lines, after_lines)
+
+  if changed and not module.check_mode:
+    write_file(path, after_lines, mode, owner, group, module)
+
+  # if module execution successful pass the key/value results
+  module.exit_json(**result)
 
 
 def main():
